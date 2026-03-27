@@ -1,6 +1,6 @@
 # Plumbing AI Booking Assistant Backend
 
-Phase 2D adds workflow-driven follow-up automation so the backend can detect no-response conversations and send deterministic reminder messages.
+Phase 3A replaces runtime schema patching with Alembic migrations so persistence changes are managed through an explicit migration history.
 
 ## Features
 
@@ -11,6 +11,7 @@ Phase 2D adds workflow-driven follow-up automation so the backend can detect no-
 - `POST /api/workflows/follow-ups/process` evaluates due follow-up workflows and sends reminder messages when a customer has not replied.
 - Configuration is environment-driven with no secrets committed to source.
 - SQLite remains the backing store and external integrations stay mocked.
+- Database schema changes are managed through Alembic migrations.
 
 ## Data Model
 
@@ -79,10 +80,22 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 copy .env.example .env
+alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
 `FOLLOW_UP_DELAY_MINUTES` controls when a no-response workflow becomes eligible for evaluation.
+
+## Database Migrations
+
+```bash
+alembic upgrade head
+alembic current
+alembic revision --autogenerate -m "describe schema change"
+alembic downgrade -1
+```
+
+The initial migration lives in `alembic/versions/20260327_01_initial_schema.py` and reflects the current application schema.
 
 ## API Examples
 
