@@ -1,11 +1,11 @@
 # Plumbing AI Booking Assistant Backend
 
-Phase 2A strengthens the FastAPI backend with customer tracking, persisted booking requests, and audit logging around core service operations.
+Phase 2B adds a messaging foundation to the FastAPI backend so lead intake can trigger persisted outbound customer communications through a mock SMS provider.
 
 ## Features
 
 - `GET /health` returns a simple status payload.
-- `POST /api/leads` finds or creates a customer, stores the lead in SQLite, assigns `emergency`, `standard`, or `review`, and writes an audit log.
+- `POST /api/leads` finds or creates a customer, stores the lead in SQLite, assigns `emergency`, `standard`, or `review`, persists an outbound confirmation message, sends it through a mock SMS provider, and writes audit logs.
 - `POST /api/bookings/request` validates `lead_id`, persists a booking request, returns the saved record, and writes an audit log.
 - Configuration is environment-driven with no secrets committed to source.
 - SQLite remains the backing store and external integrations stay mocked.
@@ -16,6 +16,15 @@ Phase 2A strengthens the FastAPI backend with customer tracking, persisted booki
 - `Lead`: an intake event linked to a customer and triaged deterministically.
 - `BookingRequest`: a persisted booking workflow record linked to both the lead and customer.
 - `AuditLog`: an append-only operational log for lead intake and booking request events.
+- `Message`: a persisted communication record linked to a customer and optionally to the originating lead.
+
+## Messaging Flow
+
+1. `POST /api/leads` receives intake data and creates the customer and lead records.
+2. The service builds an outbound confirmation SMS message for that lead.
+3. The outbound message is sent through a notification abstraction backed by a mock SMS provider.
+4. The service persists the `Message` record with provider metadata and delivery status.
+5. The service writes an `AuditLog` entry for the notification action.
 
 ## Request Flow
 
@@ -23,7 +32,8 @@ Phase 2A strengthens the FastAPI backend with customer tracking, persisted booki
 2. The service finds or creates a `Customer`.
 3. The service creates a linked `Lead` with deterministic urgency.
 4. The service writes an `AuditLog` entry for the new lead.
-5. `POST /api/bookings/request` validates the lead, stores a `BookingRequest`, returns mocked availability, and writes another `AuditLog` entry.
+5. The service creates and sends a confirmation `Message`, then writes a notification `AuditLog`.
+6. `POST /api/bookings/request` validates the lead, stores a `BookingRequest`, returns mocked availability, and writes another `AuditLog` entry.
 
 ## Project Structure
 

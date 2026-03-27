@@ -22,6 +22,7 @@ class Customer(Base):
 
     leads: Mapped[list["Lead"]] = relationship(back_populates="customer")
     booking_requests: Mapped[list["BookingRequest"]] = relationship(back_populates="customer")
+    messages: Mapped[list["Message"]] = relationship(back_populates="customer")
 
 
 class Lead(Base):
@@ -43,6 +44,7 @@ class Lead(Base):
 
     customer: Mapped["Customer"] = relationship(back_populates="leads")
     booking_requests: Mapped[list["BookingRequest"]] = relationship(back_populates="lead")
+    messages: Mapped[list["Message"]] = relationship(back_populates="lead")
 
 
 class BookingRequest(Base):
@@ -78,3 +80,26 @@ class AuditLog(Base):
         nullable=False,
         server_default=func.now(),
     )
+
+
+class Message(Base):
+    __tablename__ = "messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), nullable=False, index=True)
+    lead_id: Mapped[int | None] = mapped_column(ForeignKey("leads.id"), nullable=True, index=True)
+    direction: Mapped[str] = mapped_column(String(20), nullable=False)
+    channel: Mapped[str] = mapped_column(String(20), nullable=False)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    recipient: Mapped[str] = mapped_column(String(50), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False)
+    provider_message_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    customer: Mapped["Customer"] = relationship(back_populates="messages")
+    lead: Mapped["Lead | None"] = relationship(back_populates="messages")

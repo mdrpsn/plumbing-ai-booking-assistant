@@ -1,7 +1,8 @@
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
-from app.db.models import AuditLog, BookingRequest, Customer, Lead
+from app.db.models import AuditLog, BookingRequest, Customer, Lead, Message
 from app.db.session import Base, engine
 from app.main import app
 
@@ -46,11 +47,48 @@ def test_create_lead_persists_and_assigns_urgency() -> None:
     with engine.connect() as connection:
         customer_count = connection.execute(select(func.count()).select_from(Customer)).scalar_one()
         lead_count = connection.execute(select(func.count()).select_from(Lead)).scalar_one()
+        message_count = connection.execute(select(func.count()).select_from(Message)).scalar_one()
         audit_count = connection.execute(select(func.count()).select_from(AuditLog)).scalar_one()
 
     assert customer_count == 1
     assert lead_count == 1
-    assert audit_count == 1
+    assert message_count == 1
+    assert audit_count == 2
+
+
+def test_create_lead_creates_confirmation_message_and_audit_log() -> None:
+    response = client.post(
+        "/api/leads",
+        json={
+            "name": "Jordan Smith",
+            "phone": "5551234567",
+            "email": "jordan@example.com",
+            "issue": "Burst pipe flooding the kitchen",
+            "address": "123 Main St",
+        },
+    )
+
+    lead_id = response.json()["id"]
+    customer_id = response.json()["customer_id"]
+
+    with Session(engine) as session:
+        message = session.execute(select(Message)).scalar_one()
+        audit_logs = session.execute(
+            select(AuditLog).where(AuditLog.event_type == "notification.sent")
+        ).scalars().all()
+
+    assert message.customer_id == customer_id
+    assert message.lead_id == lead_id
+    assert message.direction == "outbound"
+    assert message.channel == "sms"
+    assert message.provider == "mock-sms"
+    assert message.status == "sent"
+    assert message.recipient == "5551234567"
+    assert "classified it as emergency" in message.body
+    assert message.provider_message_id.startswith("mock-sms-5551234567-")
+    assert len(audit_logs) == 1
+    assert audit_logs[0].entity_type == "message"
+    assert audit_logs[0].entity_id == message.id
 
 
 def test_create_lead_reuses_existing_customer() -> None:
@@ -82,11 +120,13 @@ def test_create_lead_reuses_existing_customer() -> None:
     with engine.connect() as connection:
         customer_count = connection.execute(select(func.count()).select_from(Customer)).scalar_one()
         lead_count = connection.execute(select(func.count()).select_from(Lead)).scalar_one()
+        message_count = connection.execute(select(func.count()).select_from(Message)).scalar_one()
         audit_count = connection.execute(select(func.count()).select_from(AuditLog)).scalar_one()
 
     assert customer_count == 1
     assert lead_count == 2
-    assert audit_count == 2
+    assert message_count == 2
+    assert audit_count == 4
 
 
 def test_booking_request_returns_mock_availability() -> None:
@@ -119,7 +159,7 @@ def test_booking_request_returns_mock_availability() -> None:
         audit_count = connection.execute(select(func.count()).select_from(AuditLog)).scalar_one()
 
     assert booking_request_count == 1
-    assert audit_count == 2
+    assert audit_count == 3
 
 
 def test_booking_request_validates_lead_id() -> None:
