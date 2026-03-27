@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import AuditLog, BookingRequest, Customer, Lead, Message
+from app.db.models import AuditLog, BookingRequest, Conversation, Customer, Lead, Message
 from app.db.session import Base, engine
 from app.main import app
 
@@ -47,11 +47,13 @@ def test_create_lead_persists_and_assigns_urgency() -> None:
     with engine.connect() as connection:
         customer_count = connection.execute(select(func.count()).select_from(Customer)).scalar_one()
         lead_count = connection.execute(select(func.count()).select_from(Lead)).scalar_one()
+        conversation_count = connection.execute(select(func.count()).select_from(Conversation)).scalar_one()
         message_count = connection.execute(select(func.count()).select_from(Message)).scalar_one()
         audit_count = connection.execute(select(func.count()).select_from(AuditLog)).scalar_one()
 
     assert customer_count == 1
     assert lead_count == 1
+    assert conversation_count == 1
     assert message_count == 1
     assert audit_count == 2
 
@@ -73,10 +75,12 @@ def test_create_lead_creates_confirmation_message_and_audit_log() -> None:
 
     with Session(engine) as session:
         message = session.execute(select(Message)).scalar_one()
+        conversation = session.execute(select(Conversation)).scalar_one()
         audit_logs = session.execute(
             select(AuditLog).where(AuditLog.event_type == "notification.sent")
         ).scalars().all()
 
+    assert message.conversation_id == conversation.id
     assert message.customer_id == customer_id
     assert message.lead_id == lead_id
     assert message.direction == "outbound"
@@ -86,6 +90,8 @@ def test_create_lead_creates_confirmation_message_and_audit_log() -> None:
     assert message.recipient == "5551234567"
     assert "classified it as emergency" in message.body
     assert message.provider_message_id.startswith("mock-sms-5551234567-")
+    assert conversation.status == "open"
+    assert conversation.last_message_direction == "outbound"
     assert len(audit_logs) == 1
     assert audit_logs[0].entity_type == "message"
     assert audit_logs[0].entity_id == message.id
@@ -120,11 +126,13 @@ def test_create_lead_reuses_existing_customer() -> None:
     with engine.connect() as connection:
         customer_count = connection.execute(select(func.count()).select_from(Customer)).scalar_one()
         lead_count = connection.execute(select(func.count()).select_from(Lead)).scalar_one()
+        conversation_count = connection.execute(select(func.count()).select_from(Conversation)).scalar_one()
         message_count = connection.execute(select(func.count()).select_from(Message)).scalar_one()
         audit_count = connection.execute(select(func.count()).select_from(AuditLog)).scalar_one()
 
     assert customer_count == 1
     assert lead_count == 2
+    assert conversation_count == 2
     assert message_count == 2
     assert audit_count == 4
 
@@ -167,3 +175,65 @@ def test_booking_request_validates_lead_id() -> None:
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Lead not found"
+
+
+def test_inbound_message_creates_or_updates_conversation() -> None:
+    lead_response = client.post(
+        "/api/leads",
+        json={
+            "name": "Jordan Smith",
+            "phone": "5551234567",
+            "email": "jordan@example.com",
+            "issue": "Burst pipe flooding the kitchen",
+            "address": "123 Main St",
+        },
+    )
+
+    lead_id = lead_response.json()["id"]
+    response = client.post(
+        "/api/messages/inbound",
+        json={
+            "from_phone": "5551234567",
+            "body": "Can someone come this afternoon?",
+            "provider_message_id": "provider-inbound-001",
+            "lead_id": lead_id,
+        },
+    )
+
+    body = response.json()
+    assert response.status_code == 201
+    assert body["conversation_id"] > 0
+    assert body["customer_id"] == lead_response.json()["customer_id"]
+    assert body["lead_id"] == lead_id
+    assert body["direction"] == "inbound"
+    assert body["channel"] == "sms"
+    assert body["provider"] == "mock-sms"
+    assert body["status"] == "received"
+
+    with Session(engine) as session:
+        conversation = session.execute(select(Conversation)).scalar_one()
+        messages = session.execute(select(Message).order_by(Message.id.asc())).scalars().all()
+        inbound_audit = session.execute(
+            select(AuditLog).where(AuditLog.event_type == "message.received")
+        ).scalar_one()
+
+    assert len(messages) == 2
+    assert conversation.id == body["conversation_id"]
+    assert conversation.status == "customer_replied"
+    assert conversation.last_message_direction == "inbound"
+    assert messages[1].conversation_id == conversation.id
+    assert inbound_audit.entity_id == messages[1].id
+
+
+def test_inbound_message_returns_404_for_unknown_customer_phone() -> None:
+    response = client.post(
+        "/api/messages/inbound",
+        json={
+            "from_phone": "5550000000",
+            "body": "Hello?",
+            "provider_message_id": "provider-inbound-404",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Customer not found for phone number"

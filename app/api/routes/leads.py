@@ -1,8 +1,10 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import AuditLog, Customer, Lead, Message
+from app.db.models import AuditLog, Conversation, Customer, Lead, Message
 from app.db.session import get_db
 from app.schemas.lead import LeadCreate, LeadRead
 from app.services.mock_sms_provider import MockSmsProvider
@@ -46,6 +48,14 @@ def create_lead(payload: LeadCreate, db: Session = Depends(get_db)) -> Lead:
     )
     db.add(lead)
     db.flush()
+    conversation = Conversation(
+        customer_id=customer.id,
+        lead_id=lead.id,
+        channel="sms",
+        status="open",
+    )
+    db.add(conversation)
+    db.flush()
     db.add(
         AuditLog(
             event_type="lead.created",
@@ -58,6 +68,7 @@ def create_lead(payload: LeadCreate, db: Session = Depends(get_db)) -> Lead:
         )
     )
     message = Message(
+        conversation_id=conversation.id,
         customer_id=customer.id,
         lead_id=lead.id,
         direction="outbound",
@@ -74,6 +85,9 @@ def create_lead(payload: LeadCreate, db: Session = Depends(get_db)) -> Lead:
     message.provider = notification_result.provider
     message.status = notification_result.status
     message.provider_message_id = notification_result.provider_message_id
+    message.created_at = message.created_at or datetime.now(timezone.utc)
+    conversation.last_message_direction = message.direction
+    conversation.last_message_at = message.created_at
     db.add(
         AuditLog(
             event_type="notification.sent",

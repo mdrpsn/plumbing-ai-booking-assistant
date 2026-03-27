@@ -22,6 +22,7 @@ class Customer(Base):
 
     leads: Mapped[list["Lead"]] = relationship(back_populates="customer")
     booking_requests: Mapped[list["BookingRequest"]] = relationship(back_populates="customer")
+    conversations: Mapped[list["Conversation"]] = relationship(back_populates="customer")
     messages: Mapped[list["Message"]] = relationship(back_populates="customer")
 
 
@@ -44,7 +45,35 @@ class Lead(Base):
 
     customer: Mapped["Customer"] = relationship(back_populates="leads")
     booking_requests: Mapped[list["BookingRequest"]] = relationship(back_populates="lead")
+    conversations: Mapped[list["Conversation"]] = relationship(back_populates="lead")
     messages: Mapped[list["Message"]] = relationship(back_populates="lead")
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), nullable=False, index=True)
+    lead_id: Mapped[int | None] = mapped_column(ForeignKey("leads.id"), nullable=True, index=True)
+    channel: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="open")
+    last_message_direction: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    customer: Mapped["Customer"] = relationship(back_populates="conversations")
+    lead: Mapped["Lead | None"] = relationship(back_populates="conversations")
+    messages: Mapped[list["Message"]] = relationship(back_populates="conversation")
 
 
 class BookingRequest(Base):
@@ -86,6 +115,11 @@ class Message(Base):
     __tablename__ = "messages"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    conversation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("conversations.id"),
+        nullable=True,
+        index=True,
+    )
     customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), nullable=False, index=True)
     lead_id: Mapped[int | None] = mapped_column(ForeignKey("leads.id"), nullable=True, index=True)
     direction: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -101,5 +135,6 @@ class Message(Base):
         server_default=func.now(),
     )
 
+    conversation: Mapped["Conversation | None"] = relationship(back_populates="messages")
     customer: Mapped["Customer"] = relationship(back_populates="messages")
     lead: Mapped["Lead | None"] = relationship(back_populates="messages")
