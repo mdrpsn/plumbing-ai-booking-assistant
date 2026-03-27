@@ -7,7 +7,7 @@ from app.api.routes.bookings import router as bookings_router
 from app.api.routes.health import router as health_router
 from app.api.routes.leads import router as leads_router
 from app.core.config import get_settings
-from app.db.session import Base, engine
+from app.db.session import initialize_database
 
 
 settings = get_settings()
@@ -15,7 +15,7 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    Base.metadata.create_all(bind=engine)
+    initialize_database()
     yield
 
 

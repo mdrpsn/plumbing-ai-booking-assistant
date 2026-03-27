@@ -13,6 +13,7 @@ class LeadCreate(BaseModel):
 
 class LeadRead(BaseModel):
     id: int
+    customer_id: int
     name: str
     phone: str
     email: EmailStr | None
