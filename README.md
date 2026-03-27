@@ -1,50 +1,72 @@
-# Plumbing AI Booking Assistant Backend
+# Local-Service Automation Backend
 
-FastAPI backend for a plumbing-focused AI booking and customer communication workflow.
+Reusable FastAPI backend for local-service booking, messaging, and workflow automation.
 
-This project is structured as a public-safe portfolio backend that demonstrates lead intake, deterministic triage, booking request capture, two-way messaging, no-response follow-up automation, provider abstraction, webhook verification, idempotent processing, and migration-driven persistence.
+This repository is the main public showcase. It is designed as a reusable backend platform for service businesses such as plumbing, electrical, HVAC, and similar local trades. The current implementation keeps plumbing as the flagship vertical example, while the underlying architecture is intended to be adapted across niches without rewriting the core system.
+
+## Flagship Example
+
+Plumbing is the primary example in this repo today:
+
+- lead intake and deterministic urgency triage
+- booking request capture
+- outbound confirmation messaging
+- inbound customer messaging
+- no-response follow-up automation
+- Twilio-ready provider callback handling
 
 ## What This Project Demonstrates
 
-- Production-style FastAPI service structure with clear API, service, schema, and persistence boundaries.
-- Relational workflow modeling for customers, leads, conversations, messages, booking requests, audit logs, and workflow runs.
-- Deterministic business logic for urgency triage and no-response follow-up behavior.
-- Mock-first external integration design with a safe path for local development and public repository use.
-- Configurable SMS provider support with a Twilio integration path behind a shared abstraction.
-- Idempotent inbound webhook handling and duplicate-safe workflow execution.
-- Alembic-based schema management instead of runtime schema mutation.
-- A local-first execution boundary that can evolve into a real worker/queue architecture.
+- Production-style FastAPI service structure with clear route, schema, service, and persistence boundaries.
+- Reusable local-service workflow modeling for customers, leads, conversations, messages, booking requests, audit logs, and workflow runs.
+- Mock-first integration design that is safe for a public portfolio repository.
+- Migration-driven persistence with Alembic instead of runtime schema patching.
+- Configurable SMS delivery path with mock and Twilio implementations.
+- Idempotent inbound messaging and duplicate-safe workflow processing.
+- A worker-oriented execution boundary that can evolve into a real queue/worker deployment.
 
 ## Architecture Overview
-
-At a high level, the system accepts customer leads, persists operational records in SQLite through SQLAlchemy, and coordinates communication and follow-up behavior through service-layer workflow logic.
 
 ```text
 Client / Webhook
   -> FastAPI routes
-  -> Schemas + validation
+  -> Pydantic schemas
   -> Service layer
-  -> SQLAlchemy models / SQLite
-  -> Provider abstraction (mock or Twilio)
+  -> SQLAlchemy models
+  -> SQLite
+  -> Provider abstraction (mock / Twilio)
 ```
 
-Core architectural pieces:
+Primary code areas:
 
-- `app/api/routes/`: HTTP entrypoints for health, leads, bookings, messages, and workflow processing.
-- `app/services/`: domain services for triage, SMS delivery, inbound message handling, follow-up logic, webhook verification, and workflow execution.
-- `app/db/`: SQLAlchemy session and models.
-- `app/schemas/`: request and response validation models.
-- `alembic/`: database migration configuration and revision history.
+- `app/api/routes/`: HTTP endpoints
+- `app/services/`: business logic, provider integrations, execution boundary
+- `app/db/`: models and database session
+- `app/schemas/`: request/response models
+- `alembic/`: migration history
 
-## Core Domain Model
+## Core Platform vs Vertical-Specific
 
-- `Customer`: canonical customer identity with normalized phone matching.
-- `Lead`: a plumbing request intake event linked to a customer.
-- `BookingRequest`: a persisted booking intent linked to a lead and customer.
-- `Conversation`: a two-way messaging thread linked to a customer and optionally a lead.
-- `Message`: inbound or outbound communication record with provider metadata and idempotency support.
-- `WorkflowRun`: persisted follow-up workflow/job tracking.
-- `AuditLog`: append-only operational audit trail.
+### Core Platform
+
+These parts are broadly reusable across local-service businesses:
+
+- customer identity resolution and phone normalization
+- lead, booking, message, conversation, audit, and workflow persistence
+- provider abstraction for outbound SMS
+- inbound webhook handling and idempotency
+- workflow execution boundary and delayed follow-up processing
+- Alembic migrations and environment-driven configuration
+
+### Vertical-Specific
+
+These parts are expected to vary by niche:
+
+- urgency triage rules and keywords
+- service types and booking categories
+- customer-facing message copy
+- intake fields and qualification rules
+- follow-up timing or escalation policies
 
 ## Core Flows
 
@@ -53,83 +75,103 @@ Core architectural pieces:
 `POST /api/leads`
 
 1. Validate payload.
-2. Normalize the customer phone number.
-3. Find or create the customer.
-4. Create the lead and assign deterministic urgency.
-5. Create the initial SMS conversation.
-6. Persist the lead audit log.
-7. Send outbound confirmation through the configured SMS provider.
-8. Register a no-response follow-up workflow.
+2. Normalize phone and find or create the customer.
+3. Create the lead and assign deterministic urgency.
+4. Create the initial conversation.
+5. Send outbound confirmation.
+6. Register a no-response follow-up workflow.
 
 ### Booking Request
 
 `POST /api/bookings/request`
 
 1. Validate `lead_id`.
-2. Load the lead and customer context.
-3. Persist a booking request record.
-4. Return mock availability.
-5. Write an audit log entry.
+2. Persist a booking request.
+3. Return mock availability.
+4. Write an audit log.
 
 ### Outbound Confirmation
 
 Triggered during lead creation.
 
-1. Build the confirmation message.
-2. Send through the configured provider path.
-3. Persist provider metadata on the `Message`.
+1. Build confirmation copy.
+2. Send through the configured SMS provider.
+3. Persist provider metadata on the message.
 4. Update conversation state.
-5. Write an audit log entry.
 
 ### Inbound Messaging
 
 `POST /api/messages/inbound`
 
 1. Validate inbound payload.
-2. Detect webhook replay with a persisted idempotency key.
-3. Resolve the customer by normalized phone.
-4. Find or create the matching conversation.
-5. Persist the inbound message.
-6. Update conversation state to reflect customer reply.
-7. Write an audit log entry.
+2. Detect replay through idempotency keys.
+3. Resolve customer by normalized phone.
+4. Persist inbound message and update conversation state.
 
-Twilio form/webhook path:
+Twilio inbound route:
 
 - `POST /api/messages/providers/twilio/inbound`
 
 ### No-Response Follow-Up
 
-Lead creation registers a `WorkflowRun` for delayed follow-up evaluation.
-
 `POST /api/workflows/follow-ups/process`
 
-1. Pull due workflow jobs from the local execution boundary.
-2. Reuse the same execution service a future worker would call.
-3. Skip workflows if the customer already replied.
-4. Reuse an existing follow-up result if one was already created.
-5. Otherwise create and send a follow-up outbound message.
-6. Update workflow, conversation, and audit records.
+1. Pull due workflow jobs.
+2. Skip if the customer already replied.
+3. Reuse existing follow-up results if already processed.
+4. Otherwise send a follow-up outbound message.
+5. Update workflow, conversation, and audit state.
 
 ### Provider Callbacks
 
-Twilio status callback:
+Twilio delivery status route:
 
 - `POST /api/messages/providers/twilio/status`
 
-1. Verify the request signature when Twilio verification is enabled.
-2. Resolve the message by provider message identifier.
-3. Update persisted delivery status.
-4. Write callback audit logs.
+The callback path verifies signatures when Twilio mode is enabled, updates message delivery status, and writes audit logs.
 
-## API Summary
+## Vertical Adaptation
 
-- `GET /health`
-- `POST /api/leads`
-- `POST /api/bookings/request`
-- `POST /api/messages/inbound`
-- `POST /api/messages/providers/twilio/inbound`
-- `POST /api/messages/providers/twilio/status`
-- `POST /api/workflows/follow-ups/process`
+This backend is intentionally structured so a second vertical can reuse most of the system while changing a smaller set of business rules and presentation details.
+
+What stays the same:
+
+- API and service boundaries
+- database model structure
+- messaging and follow-up workflow patterns
+- provider abstraction
+- migration and execution architecture
+
+What changes by niche:
+
+- triage logic
+- service catalog language
+- confirmation and follow-up copy
+- operator workflows and qualification prompts
+
+### Plumbing vs Electrical Example
+
+Urgency triage examples:
+
+- Plumbing: burst pipe, flooding, sewage backup, no water
+- Electrical: burning smell, panel sparking, power outage, exposed wiring
+
+Service types:
+
+- Plumbing: drain cleaning, leak repair, water heater service, fixture installation
+- Electrical: outlet repair, breaker/panel work, lighting installation, EV charger install
+
+Messaging copy differences:
+
+- Plumbing: “We received your plumbing request and classified it as emergency.”
+- Electrical: “We received your electrical service request and flagged it for urgent safety review.”
+
+For a dedicated adaptation guide, see [docs/vertical-adaptation.md](C:/Users/Mike/plumbing-ai-booking-assistant/docs/vertical-adaptation.md).
+
+## Project Family
+
+- Plumbing backend: this repository, positioned as the main flagship example
+- Electrical adaptation example: `electrical-ai-booking-assistant` as proof that the core backend can be repurposed across service niches
 
 ## Setup
 
@@ -144,21 +186,19 @@ alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
-Default local behavior is safe and mock-first:
+Safe local defaults:
 
-- SQLite is used as the database.
-- `SMS_PROVIDER=mock` is the default.
-- No real provider credentials are required.
+- SQLite database
+- `SMS_PROVIDER=mock`
+- no real credentials required
 
-### Test Run
+### Tests
 
 ```bash
 python -m pytest
 ```
 
 ## Database Migrations
-
-Migration commands:
 
 ```bash
 alembic upgrade head
@@ -167,25 +207,15 @@ alembic revision --autogenerate -m "describe schema change"
 alembic downgrade -1
 ```
 
-Current migration history includes:
-
-- Initial schema creation
-- Customer normalized phone support
-- Message idempotency key support
-
 ## Provider Configuration
 
 ### Mock Provider
-
-Recommended for local development and tests.
 
 ```env
 SMS_PROVIDER=mock
 ```
 
 ### Twilio Provider
-
-Enable Twilio behind the same notification abstraction:
 
 ```env
 SMS_PROVIDER=twilio
@@ -198,51 +228,17 @@ TWILIO_STATUS_CALLBACK_URL=https://your-domain.example/api/messages/providers/tw
 
 Optional:
 
-- `TWILIO_API_BASE_URL` for controlled environments or alternate endpoints.
+- `TWILIO_API_BASE_URL`
 
-Public-safety note:
+Public-safe guidance:
 
-- Never commit live Twilio credentials.
-- Keep secrets in environment variables only.
-- The repository is designed to run safely in mock mode by default.
-
-## Webhook Verification Behavior
-
-- In mock mode, Twilio-specific webhook routes can be exercised locally without real credentials or signature enforcement.
-- In Twilio mode, webhook verification can be enabled through `TWILIO_WEBHOOK_VERIFICATION_ENABLED=true`.
-- Signature verification is intended to be bypassed only for local/mock workflows.
-
-## Phone Normalization
-
-- Customer matching uses a canonical normalized phone value.
-- Common formats such as `5551234567`, `(555) 123-4567`, and `+1 555-123-4567` resolve to the same customer.
-- Inbound message resolution uses the same normalization path as lead intake.
-
-## Idempotency and Duplicate Protection
-
-- Inbound replay detection uses a provider-derived idempotency key.
-- Replaying the same inbound provider message does not create a duplicate `Message`.
-- Follow-up processing persists workflow-specific idempotency keys.
-- Re-running follow-up processing does not send the same follow-up twice.
-
-## Execution Model
-
-Current local-first execution:
-
-- API route triggers workflow execution directly.
-- `WorkflowJobQueue` identifies due jobs from persisted workflow records.
-- `WorkflowExecutionService` dispatches workflow jobs to follow-up processing logic.
-
-How this maps to a future Redis/worker setup:
-
-- Replace the local queue abstraction with Redis-backed job reservation.
-- Run `WorkflowExecutionService` in a separate worker process.
-- Keep workflow business logic in the same service layer.
-- Preserve the existing API boundary while moving execution off-request.
+- never commit live credentials
+- keep secrets in environment variables only
+- use mock mode for local demos and portfolio review
 
 ## Sample cURL Commands
 
-### Health Check
+### Health
 
 ```bash
 curl http://127.0.0.1:8000/health
@@ -264,7 +260,7 @@ curl -X POST http://127.0.0.1:8000/api/bookings/request ^
   -d "{\"lead_id\":1}"
 ```
 
-### Receive Local Inbound Message
+### Receive Inbound Message
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/messages/inbound ^
@@ -280,7 +276,7 @@ curl -X POST http://127.0.0.1:8000/api/workflows/follow-ups/process ^
   -d "{\"now_at\":\"2026-03-27T14:00:00Z\"}"
 ```
 
-### Twilio Status Callback Example
+### Twilio Status Callback
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/messages/providers/twilio/status ^
@@ -289,32 +285,17 @@ curl -X POST http://127.0.0.1:8000/api/messages/providers/twilio/status ^
   -F "MessageStatus=delivered"
 ```
 
-## Project Structure
-
-```text
-alembic/
-app/
-  api/routes/
-  core/
-  db/
-  schemas/
-  services/
-tests/
-```
-
 ## Roadmap / Future Improvements
 
-- Add authentication and role-based operational access for dashboard/admin use.
-- Add a real calendar integration boundary for technician availability and booking confirmation.
-- Add outbound email support behind the same notification abstraction.
-- Introduce a Redis-backed queue and a dedicated worker process.
-- Add observability primitives such as structured logging, metrics, and tracing.
-- Add richer lead qualification and AI-assisted triage orchestration.
-- Add conversation summarization and operator handoff tooling.
-- Add CI checks for migrations, linting, and contract tests.
+- Add configurable vertical profiles or vertical config modules.
+- Add richer per-vertical triage and service catalogs.
+- Add authentication and operator-facing admin workflows.
+- Add Redis-backed queueing and dedicated workers.
+- Add observability primitives such as metrics, tracing, and structured logs.
+- Add more provider integrations beyond Twilio.
 
-## Public-Safe Repository Notes
+## Public-Safe Notes
 
 - No secrets are committed to source.
-- External integrations default to mock-safe behavior.
-- Example values in docs are placeholders only.
+- Mock-safe defaults remain in place.
+- Example values are placeholders only.
