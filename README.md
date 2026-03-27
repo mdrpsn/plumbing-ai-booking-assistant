@@ -1,6 +1,6 @@
 # Plumbing AI Booking Assistant Backend
 
-Phase 3A, 3B, and 3C move persistence and messaging toward a more production-grade setup with Alembic migrations, canonical phone normalization, and idempotent webhook/workflow behavior.
+Phase 3A through 3D move persistence and messaging toward a more production-grade setup with Alembic migrations, canonical phone normalization, idempotent processing, and a worker-oriented workflow execution boundary.
 
 ## Features
 
@@ -9,6 +9,7 @@ Phase 3A, 3B, and 3C move persistence and messaging toward a more production-gra
 - `POST /api/bookings/request` validates `lead_id`, persists a booking request, returns the saved record, and writes an audit log.
 - `POST /api/messages/inbound` validates an inbound SMS payload, resolves the customer, creates or reuses a conversation, persists the inbound message, updates conversation state, and writes an audit log.
 - `POST /api/workflows/follow-ups/process` evaluates due follow-up workflows and sends reminder messages when a customer has not replied.
+- Workflow execution is routed through a reusable execution service and lightweight job queue abstraction that can later back a real worker process.
 - Configuration is environment-driven with no secrets committed to source.
 - SQLite remains the backing store and external integrations stay mocked.
 - Database schema changes are managed through Alembic migrations.
@@ -50,11 +51,21 @@ Phase 3A, 3B, and 3C move persistence and messaging toward a more production-gra
 ## Follow-Up Workflow
 
 1. Lead creation registers a pending no-response `WorkflowRun` with a deterministic delay.
-2. `POST /api/workflows/follow-ups/process` evaluates due pending workflow runs.
-3. If an inbound customer message exists for the conversation, the workflow is marked `skipped`.
-4. If a follow-up message was already created for the workflow, the workflow reuses that persisted result instead of sending again.
-5. If no inbound reply exists and no prior follow-up exists, the service creates and sends an outbound follow-up `Message`.
-6. The conversation state, workflow status, and audit logs are updated with the outcome.
+2. A workflow execution service pulls due jobs from a lightweight local job queue abstraction.
+3. `POST /api/workflows/follow-ups/process` uses the same execution service that a background worker would use.
+4. Due pending workflow runs are executed through the follow-up processor.
+5. If an inbound customer message exists for the conversation, the workflow is marked `skipped`.
+6. If a follow-up message was already created for the workflow, the workflow reuses that persisted result instead of sending again.
+7. If no inbound reply exists and no prior follow-up exists, the service creates and sends an outbound follow-up `Message`.
+8. The conversation state, workflow status, and audit logs are updated with the outcome.
+
+## Execution Architecture
+
+- `app/api/routes/workflows.py` is now a thin API adapter over the workflow execution service.
+- `app/services/workflow_execution.py` provides a reusable execution boundary with a local `WorkflowJobQueue` and `WorkflowExecutionService`.
+- `app/services/follow_up.py` contains the workflow-specific business logic for executing one no-response follow-up workflow run.
+- In the current local-first model, the API route invokes the execution service directly against SQLite.
+- In a future Redis/worker setup, the same execution service can run in a separate worker process while the queue abstraction is replaced with Redis-backed job reservation and dispatch.
 
 ## Request Flow
 

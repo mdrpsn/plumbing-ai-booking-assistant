@@ -8,6 +8,9 @@ from app.db.models import AuditLog, BookingRequest, Conversation, Customer, Lead
 from app.db.session import Base, engine
 from app.main import app
 from app.services.phone_normalization import normalize_phone
+from app.services.mock_sms_provider import MockSmsProvider
+from app.services.notification_service import NotificationService
+from app.services.workflow_execution import WorkflowExecutionService
 
 
 client = TestClient(app)
@@ -407,6 +410,37 @@ def test_follow_up_process_is_safe_to_rerun() -> None:
         ).scalars().all()
 
     assert len(outbound_follow_ups) == 1
+
+
+def test_workflow_execution_service_is_reusable_outside_api_route() -> None:
+    client.post(
+        "/api/leads",
+        json={
+            "name": "Jordan Smith",
+            "phone": "5551234567",
+            "email": "jordan@example.com",
+            "issue": "Burst pipe flooding the kitchen",
+            "address": "123 Main St",
+        },
+    )
+
+    with Session(engine) as session:
+        workflow_run = session.execute(select(WorkflowRun)).scalar_one()
+        workflow_run.scheduled_for = datetime.now(UTC) - timedelta(minutes=1)
+        session.commit()
+
+    with Session(engine) as session:
+        execution_service = WorkflowExecutionService(
+            notification_service=NotificationService(sms_provider=MockSmsProvider())
+        )
+        result = execution_service.process_due_workflows(
+            session,
+            now_at=datetime.now(UTC),
+        )
+
+    assert result.evaluated == 1
+    assert result.sent == 1
+    assert result.skipped == 0
 
 
 def test_follow_up_process_skips_when_customer_replied() -> None:
