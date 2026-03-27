@@ -8,18 +8,18 @@ from app.db.models import AuditLog, Conversation, Customer, Lead, Message
 from app.db.session import get_db
 from app.schemas.lead import LeadCreate, LeadRead
 from app.services.follow_up import register_no_response_follow_up
-from app.services.mock_sms_provider import MockSmsProvider
-from app.services.notification_service import NotificationService
 from app.services.phone_normalization import normalize_phone
+from app.services.sms_provider_factory import get_notification_service, get_sms_provider
 from app.services.triage import determine_urgency
 
 
 router = APIRouter(prefix="/api/leads", tags=["leads"])
-notification_service = NotificationService(sms_provider=MockSmsProvider())
 
 
 @router.post("", response_model=LeadRead, status_code=status.HTTP_201_CREATED)
 def create_lead(payload: LeadCreate, db: Session = Depends(get_db)) -> Lead:
+    notification_service = get_notification_service()
+    sms_provider = get_sms_provider()
     normalized_phone = normalize_phone(payload.phone)
     customer = db.scalar(
         select(Customer).where(Customer.normalized_phone == normalized_phone)
@@ -77,7 +77,7 @@ def create_lead(payload: LeadCreate, db: Session = Depends(get_db)) -> Lead:
         lead_id=lead.id,
         direction="outbound",
         channel="sms",
-        provider=MockSmsProvider.provider_name,
+        provider=getattr(sms_provider, "provider_name", "sms"),
         recipient=customer.phone,
         body=notification_service.build_lead_confirmation(customer, lead),
         status="queued",

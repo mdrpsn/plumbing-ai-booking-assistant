@@ -1,6 +1,6 @@
 # Plumbing AI Booking Assistant Backend
 
-Phase 3A through 3D move persistence and messaging toward a more production-grade setup with Alembic migrations, canonical phone normalization, idempotent processing, and a worker-oriented workflow execution boundary.
+Phase 4A adds a real SMS provider boundary with configuration-driven selection, while keeping mock delivery as the default safe path for local development and tests.
 
 ## Features
 
@@ -10,6 +10,7 @@ Phase 3A through 3D move persistence and messaging toward a more production-grad
 - `POST /api/messages/inbound` validates an inbound SMS payload, resolves the customer, creates or reuses a conversation, persists the inbound message, updates conversation state, and writes an audit log.
 - `POST /api/workflows/follow-ups/process` evaluates due follow-up workflows and sends reminder messages when a customer has not replied.
 - Workflow execution is routed through a reusable execution service and lightweight job queue abstraction that can later back a real worker process.
+- SMS delivery is selected from configuration, with `mock` as the default provider and `twilio` available behind the same abstraction.
 - Configuration is environment-driven with no secrets committed to source.
 - SQLite remains the backing store and external integrations stay mocked.
 - Database schema changes are managed through Alembic migrations.
@@ -66,6 +67,21 @@ Phase 3A through 3D move persistence and messaging toward a more production-grad
 - `app/services/follow_up.py` contains the workflow-specific business logic for executing one no-response follow-up workflow run.
 - In the current local-first model, the API route invokes the execution service directly against SQLite.
 - In a future Redis/worker setup, the same execution service can run in a separate worker process while the queue abstraction is replaced with Redis-backed job reservation and dispatch.
+
+## SMS Provider Selection
+
+- `SMS_PROVIDER=mock` is the default and is used for local development and tests.
+- `SMS_PROVIDER=twilio` enables the Twilio-backed implementation behind the same notification abstraction.
+- Lead confirmations and follow-up messages both use the configured provider path.
+- No credentials are required for tests because the default provider remains mock-based.
+- Do not commit live Twilio credentials; configure them only through environment variables.
+
+Required environment variables when `SMS_PROVIDER=twilio`:
+
+- `TWILIO_ACCOUNT_SID`
+- `TWILIO_AUTH_TOKEN`
+- `TWILIO_FROM_PHONE`
+- Optional: `TWILIO_API_BASE_URL` if you need a non-default API host for controlled environments.
 
 ## Request Flow
 

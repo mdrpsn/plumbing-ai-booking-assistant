@@ -7,21 +7,30 @@ from datetime import UTC, datetime, timedelta
 from app.db.models import AuditLog, BookingRequest, Conversation, Customer, Lead, Message, WorkflowRun
 from app.db.session import Base, engine
 from app.main import app
-from app.services.phone_normalization import normalize_phone
 from app.services.mock_sms_provider import MockSmsProvider
 from app.services.notification_service import NotificationService
+from app.services.phone_normalization import normalize_phone
+from app.services.sms_provider_factory import get_notification_service, get_sms_provider
+from app.services.twilio_sms_provider import TwilioSmsProvider
 from app.services.workflow_execution import WorkflowExecutionService
+from app.core.config import get_settings
 
 
 client = TestClient(app)
 
 
 def setup_function() -> None:
+    get_settings.cache_clear()
+    get_sms_provider.cache_clear()
+    get_notification_service.cache_clear()
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
 
 
 def teardown_function() -> None:
+    get_settings.cache_clear()
+    get_sms_provider.cache_clear()
+    get_notification_service.cache_clear()
     Base.metadata.drop_all(bind=engine)
 
 
@@ -494,3 +503,27 @@ def test_follow_up_process_skips_when_customer_replied() -> None:
     assert workflow_run.status == "skipped"
     assert workflow_run.result_message_id is None
     assert skip_audit.entity_id == workflow_run.id
+
+
+def test_sms_provider_defaults_to_mock() -> None:
+    provider = get_sms_provider()
+    notification_service = get_notification_service()
+
+    assert isinstance(provider, MockSmsProvider)
+    assert isinstance(notification_service.sms_provider, MockSmsProvider)
+
+
+def test_sms_provider_can_select_twilio_from_configuration(monkeypatch) -> None:
+    monkeypatch.setenv("SMS_PROVIDER", "twilio")
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "AC123")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "secret-token")
+    monkeypatch.setenv("TWILIO_FROM_PHONE", "+15550001111")
+    get_settings.cache_clear()
+    get_sms_provider.cache_clear()
+    get_notification_service.cache_clear()
+
+    provider = get_sms_provider()
+    notification_service = get_notification_service()
+
+    assert isinstance(provider, TwilioSmsProvider)
+    assert isinstance(notification_service.sms_provider, TwilioSmsProvider)
