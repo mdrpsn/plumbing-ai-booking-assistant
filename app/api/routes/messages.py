@@ -8,6 +8,7 @@ from app.db.models import AuditLog, Conversation, Customer, Lead, Message
 from app.db.session import get_db
 from app.schemas.message import InboundMessageRead, InboundMessageWebhook
 from app.services.mock_sms_provider import MockSmsProvider
+from app.services.phone_normalization import normalize_phone
 
 
 router = APIRouter(prefix="/api/messages", tags=["messages"])
@@ -18,7 +19,9 @@ def receive_inbound_message(
     payload: InboundMessageWebhook,
     db: Session = Depends(get_db),
 ) -> Message:
-    customer = db.scalar(select(Customer).where(Customer.phone == payload.from_phone))
+    customer = db.scalar(
+        select(Customer).where(Customer.normalized_phone == normalize_phone(payload.from_phone))
+    )
     if customer is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -1,6 +1,6 @@
 # Plumbing AI Booking Assistant Backend
 
-Phase 3A replaces runtime schema patching with Alembic migrations so persistence changes are managed through an explicit migration history.
+Phase 3A and 3B move persistence toward a more production-grade setup with Alembic migrations and canonical phone normalization for customer identity resolution.
 
 ## Features
 
@@ -12,10 +12,12 @@ Phase 3A replaces runtime schema patching with Alembic migrations so persistence
 - Configuration is environment-driven with no secrets committed to source.
 - SQLite remains the backing store and external integrations stay mocked.
 - Database schema changes are managed through Alembic migrations.
+- Customer identity resolution uses canonical normalized phone values, so common phone input formats resolve to the same customer record.
 
 ## Data Model
 
 - `Customer`: the caller or homeowner record keyed operationally by phone and email.
+- `Customer`: the caller or homeowner record keyed operationally by a canonical normalized phone value, while preserving the latest raw phone input for display and messaging.
 - `Lead`: an intake event linked to a customer and triaged deterministically.
 - `BookingRequest`: a persisted booking workflow record linked to both the lead and customer.
 - `AuditLog`: an append-only operational log for lead intake and booking request events.
@@ -53,13 +55,19 @@ Phase 3A replaces runtime schema patching with Alembic migrations so persistence
 ## Request Flow
 
 1. `POST /api/leads` receives intake data.
-2. The service finds or creates a `Customer`.
+2. The service normalizes the phone number and finds or creates a `Customer`.
 3. The service creates a linked `Lead` with deterministic urgency.
 4. The service writes an `AuditLog` entry for the new lead.
 5. The service creates and sends a confirmation `Message`, then writes a notification `AuditLog`.
 6. Customers can reply through `POST /api/messages/inbound`, which updates the linked conversation state.
 7. Follow-up processing can send a reminder message if the customer has not replied within the configured threshold.
 8. `POST /api/bookings/request` validates the lead, stores a `BookingRequest`, returns mocked availability, and writes another `AuditLog` entry.
+
+## Phone Normalization
+
+- Customer lookups use a canonical normalized phone format.
+- Inputs such as `5551234567`, `(555) 123-4567`, and `+1 555-123-4567` resolve to the same normalized value.
+- Inbound messaging resolution uses the same normalized phone matching logic as lead creation.
 
 ## Project Structure
 

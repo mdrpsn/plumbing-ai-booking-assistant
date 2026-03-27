@@ -10,6 +10,7 @@ from app.schemas.lead import LeadCreate, LeadRead
 from app.services.follow_up import register_no_response_follow_up
 from app.services.mock_sms_provider import MockSmsProvider
 from app.services.notification_service import NotificationService
+from app.services.phone_normalization import normalize_phone
 from app.services.triage import determine_urgency
 
 
@@ -19,16 +20,15 @@ notification_service = NotificationService(sms_provider=MockSmsProvider())
 
 @router.post("", response_model=LeadRead, status_code=status.HTTP_201_CREATED)
 def create_lead(payload: LeadCreate, db: Session = Depends(get_db)) -> Lead:
+    normalized_phone = normalize_phone(payload.phone)
     customer = db.scalar(
-        select(Customer).where(
-            Customer.phone == payload.phone,
-            Customer.email == payload.email,
-        )
+        select(Customer).where(Customer.normalized_phone == normalized_phone)
     )
     if customer is None:
         customer = Customer(
             name=payload.name,
             phone=payload.phone,
+            normalized_phone=normalized_phone,
             email=payload.email,
             address=payload.address,
         )
@@ -36,6 +36,9 @@ def create_lead(payload: LeadCreate, db: Session = Depends(get_db)) -> Lead:
         db.flush()
     else:
         customer.name = payload.name
+        customer.phone = payload.phone
+        customer.normalized_phone = normalized_phone
+        customer.email = customer.email or payload.email
         customer.address = payload.address or customer.address
 
     lead = Lead(

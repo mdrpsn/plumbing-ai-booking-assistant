@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from app.db.models import AuditLog, BookingRequest, Conversation, Customer, Lead, Message, WorkflowRun
 from app.db.session import Base, engine
 from app.main import app
+from app.services.phone_normalization import normalize_phone
 
 
 client = TestClient(app)
@@ -80,6 +81,7 @@ def test_create_lead_creates_confirmation_message_and_audit_log() -> None:
     with Session(engine) as session:
         message = session.execute(select(Message)).scalar_one()
         conversation = session.execute(select(Conversation)).scalar_one()
+        customer = session.execute(select(Customer)).scalar_one()
         workflow_run = session.execute(select(WorkflowRun)).scalar_one()
         audit_logs = session.execute(
             select(AuditLog).where(AuditLog.event_type == "notification.sent")
@@ -95,6 +97,7 @@ def test_create_lead_creates_confirmation_message_and_audit_log() -> None:
     assert message.recipient == "5551234567"
     assert "classified it as emergency" in message.body
     assert message.provider_message_id.startswith("mock-sms-5551234567-")
+    assert customer.normalized_phone == normalize_phone("5551234567")
     assert conversation.status == "open"
     assert conversation.last_message_direction == "outbound"
     assert workflow_run.workflow_type == "no_response_follow_up"
@@ -145,6 +148,38 @@ def test_create_lead_reuses_existing_customer() -> None:
     assert message_count == 2
     assert workflow_count == 2
     assert audit_count == 6
+
+
+def test_create_lead_reuses_customer_across_phone_formats() -> None:
+    first_response = client.post(
+        "/api/leads",
+        json={
+            "name": "Jordan Smith",
+            "phone": "(555) 123-4567",
+            "email": "jordan@example.com",
+            "issue": "Burst pipe flooding the kitchen",
+            "address": "123 Main St",
+        },
+    )
+    second_response = client.post(
+        "/api/leads",
+        json={
+            "name": "Jordan Smith",
+            "phone": "+1 555-123-4567",
+            "issue": "Bathroom faucet leak",
+            "address": "123 Main St",
+        },
+    )
+
+    assert first_response.status_code == 201
+    assert second_response.status_code == 201
+    assert first_response.json()["customer_id"] == second_response.json()["customer_id"]
+
+    with Session(engine) as session:
+        customer = session.execute(select(Customer)).scalar_one()
+
+    assert customer.normalized_phone == "+15551234567"
+    assert customer.phone == "+1 555-123-4567"
 
 
 def test_booking_request_returns_mock_availability() -> None:
@@ -203,7 +238,7 @@ def test_inbound_message_creates_or_updates_conversation() -> None:
     response = client.post(
         "/api/messages/inbound",
         json={
-            "from_phone": "5551234567",
+            "from_phone": "(555) 123-4567",
             "body": "Can someone come this afternoon?",
             "provider_message_id": "provider-inbound-001",
             "lead_id": lead_id,
