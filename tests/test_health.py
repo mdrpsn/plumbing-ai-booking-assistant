@@ -270,6 +270,43 @@ def test_inbound_message_creates_or_updates_conversation() -> None:
     assert inbound_audit.entity_id == messages[1].id
 
 
+def test_inbound_message_webhook_replay_is_idempotent() -> None:
+    lead_response = client.post(
+        "/api/leads",
+        json={
+            "name": "Jordan Smith",
+            "phone": "5551234567",
+            "email": "jordan@example.com",
+            "issue": "Burst pipe flooding the kitchen",
+            "address": "123 Main St",
+        },
+    )
+
+    payload = {
+        "from_phone": "5551234567",
+        "body": "Checking in again.",
+        "provider_message_id": "provider-inbound-replay-001",
+        "lead_id": lead_response.json()["id"],
+    }
+    first_response = client.post("/api/messages/inbound", json=payload)
+    second_response = client.post("/api/messages/inbound", json=payload)
+
+    assert first_response.status_code == 201
+    assert second_response.status_code == 200
+    assert first_response.json()["id"] == second_response.json()["id"]
+
+    with Session(engine) as session:
+        inbound_messages = session.execute(
+            select(Message).where(Message.direction == "inbound")
+        ).scalars().all()
+        inbound_audits = session.execute(
+            select(AuditLog).where(AuditLog.event_type == "message.received")
+        ).scalars().all()
+
+    assert len(inbound_messages) == 1
+    assert len(inbound_audits) == 1
+
+
 def test_inbound_message_returns_404_for_unknown_customer_phone() -> None:
     response = client.post(
         "/api/messages/inbound",
@@ -330,6 +367,46 @@ def test_follow_up_process_sends_message_when_no_customer_reply_exists() -> None
     assert workflow_run.status == "completed"
     assert workflow_run.result_message_id == messages[1].id
     assert completion_audit.entity_id == workflow_run.id
+
+
+def test_follow_up_process_is_safe_to_rerun() -> None:
+    client.post(
+        "/api/leads",
+        json={
+            "name": "Jordan Smith",
+            "phone": "5551234567",
+            "email": "jordan@example.com",
+            "issue": "Burst pipe flooding the kitchen",
+            "address": "123 Main St",
+        },
+    )
+
+    with Session(engine) as session:
+        workflow_run = session.execute(select(WorkflowRun)).scalar_one()
+        workflow_run.scheduled_for = datetime.now(UTC) - timedelta(minutes=1)
+        session.commit()
+
+    first_response = client.post(
+        "/api/workflows/follow-ups/process",
+        json={"now_at": datetime.now(UTC).isoformat()},
+    )
+    second_response = client.post(
+        "/api/workflows/follow-ups/process",
+        json={"now_at": datetime.now(UTC).isoformat()},
+    )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert first_response.json()["sent"] == 1
+    assert second_response.json()["evaluated"] == 0
+    assert second_response.json()["sent"] == 0
+
+    with Session(engine) as session:
+        outbound_follow_ups = session.execute(
+            select(Message).where(Message.idempotency_key.like("workflow:%:follow_up"))
+        ).scalars().all()
+
+    assert len(outbound_follow_ups) == 1
 
 
 def test_follow_up_process_skips_when_customer_replied() -> None:

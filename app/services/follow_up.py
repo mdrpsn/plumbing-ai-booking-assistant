@@ -113,6 +113,26 @@ def process_due_follow_ups(
             )
             continue
 
+        existing_follow_up = db.scalar(
+            select(Message).where(
+                Message.idempotency_key == _build_follow_up_idempotency_key(workflow_run.id)
+            )
+        )
+        if existing_follow_up is not None:
+            conversation.status = "follow_up_sent"
+            conversation.last_message_direction = existing_follow_up.direction
+            conversation.last_message_at = existing_follow_up.created_at
+            workflow_run.status = "completed"
+            workflow_run.processed_at = evaluation_time
+            workflow_run.result_message_id = existing_follow_up.id
+            workflow_run.details = {
+                **workflow_run.details,
+                "follow_up_message_id": existing_follow_up.id,
+                "processed_at": evaluation_time.isoformat(),
+                "idempotent_reuse": True,
+            }
+            continue
+
         follow_up_message = Message(
             conversation_id=conversation.id,
             customer_id=customer.id,
@@ -120,6 +140,7 @@ def process_due_follow_ups(
             direction="outbound",
             channel=conversation.channel,
             provider="mock-sms",
+            idempotency_key=_build_follow_up_idempotency_key(workflow_run.id),
             recipient=customer.phone,
             body=build_no_response_follow_up(customer),
             status="queued",
@@ -193,3 +214,7 @@ def _normalize_datetime(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _build_follow_up_idempotency_key(workflow_run_id: int) -> str:
+    return f"workflow:{workflow_run_id}:follow_up"

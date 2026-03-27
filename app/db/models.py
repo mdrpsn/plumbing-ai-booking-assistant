@@ -127,6 +127,7 @@ class Message(Base):
     direction: Mapped[str] = mapped_column(String(20), nullable=False)
     channel: Mapped[str] = mapped_column(String(20), nullable=False)
     provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     recipient: Mapped[str] = mapped_column(String(50), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(40), nullable=False)

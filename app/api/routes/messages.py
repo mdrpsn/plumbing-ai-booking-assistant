@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -17,8 +17,17 @@ router = APIRouter(prefix="/api/messages", tags=["messages"])
 @router.post("/inbound", response_model=InboundMessageRead, status_code=status.HTTP_201_CREATED)
 def receive_inbound_message(
     payload: InboundMessageWebhook,
+    response: Response,
     db: Session = Depends(get_db),
 ) -> Message:
+    idempotency_key = _build_inbound_idempotency_key(payload.provider_message_id)
+    existing_message = db.scalar(
+        select(Message).where(Message.idempotency_key == idempotency_key)
+    )
+    if existing_message is not None:
+        response.status_code = status.HTTP_200_OK
+        return existing_message
+
     customer = db.scalar(
         select(Customer).where(Customer.normalized_phone == normalize_phone(payload.from_phone))
     )
@@ -37,6 +46,7 @@ def receive_inbound_message(
         direction="inbound",
         channel=conversation.channel,
         provider=MockSmsProvider.provider_name,
+        idempotency_key=idempotency_key,
         recipient=payload.from_phone,
         body=payload.body,
         status="received",
@@ -105,3 +115,7 @@ def _get_or_create_conversation(db: Session, customer: Customer, lead: Lead | No
         db.flush()
 
     return conversation
+
+
+def _build_inbound_idempotency_key(provider_message_id: str) -> str:
+    return f"inbound:{MockSmsProvider.provider_name}:{provider_message_id}"

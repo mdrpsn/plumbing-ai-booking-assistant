@@ -1,6 +1,6 @@
 # Plumbing AI Booking Assistant Backend
 
-Phase 3A and 3B move persistence toward a more production-grade setup with Alembic migrations and canonical phone normalization for customer identity resolution.
+Phase 3A, 3B, and 3C move persistence and messaging toward a more production-grade setup with Alembic migrations, canonical phone normalization, and idempotent webhook/workflow behavior.
 
 ## Features
 
@@ -13,6 +13,7 @@ Phase 3A and 3B move persistence toward a more production-grade setup with Alemb
 - SQLite remains the backing store and external integrations stay mocked.
 - Database schema changes are managed through Alembic migrations.
 - Customer identity resolution uses canonical normalized phone values, so common phone input formats resolve to the same customer record.
+- Inbound webhooks and follow-up processing are idempotent and safe to replay.
 
 ## Data Model
 
@@ -39,18 +40,21 @@ Phase 3A and 3B move persistence toward a more production-grade setup with Alemb
 
 1. `POST /api/messages/inbound` validates the inbound webhook payload.
 2. The service resolves the customer by phone number.
-3. The service finds or creates the matching `Conversation` for the customer and lead.
-4. The service persists the inbound `Message` with direction `inbound`.
-5. The service updates conversation state to reflect the customer reply.
-6. The service writes an `AuditLog` entry for the inbound message event.
+3. The service checks the persisted inbound idempotency key derived from the provider message identifier.
+4. If the webhook is a replay, the existing `Message` record is returned without creating duplicates.
+5. Otherwise, the service finds or creates the matching `Conversation` for the customer and lead.
+6. The service persists the inbound `Message` with direction `inbound`.
+7. The service updates conversation state to reflect the customer reply.
+8. The service writes an `AuditLog` entry for the inbound message event.
 
 ## Follow-Up Workflow
 
 1. Lead creation registers a pending no-response `WorkflowRun` with a deterministic delay.
 2. `POST /api/workflows/follow-ups/process` evaluates due pending workflow runs.
 3. If an inbound customer message exists for the conversation, the workflow is marked `skipped`.
-4. If no inbound reply exists, the service creates and sends an outbound follow-up `Message`.
-5. The conversation state, workflow status, and audit logs are updated with the outcome.
+4. If a follow-up message was already created for the workflow, the workflow reuses that persisted result instead of sending again.
+5. If no inbound reply exists and no prior follow-up exists, the service creates and sends an outbound follow-up `Message`.
+6. The conversation state, workflow status, and audit logs are updated with the outcome.
 
 ## Request Flow
 
@@ -68,6 +72,12 @@ Phase 3A and 3B move persistence toward a more production-grade setup with Alemb
 - Customer lookups use a canonical normalized phone format.
 - Inputs such as `5551234567`, `(555) 123-4567`, and `+1 555-123-4567` resolve to the same normalized value.
 - Inbound messaging resolution uses the same normalized phone matching logic as lead creation.
+
+## Idempotency
+
+- Inbound webhook replay is detected from the provider message identifier and returns the existing persisted message instead of creating a duplicate.
+- Follow-up processing persists a workflow-specific idempotency key on the outbound follow-up message.
+- Re-running follow-up processing after a successful send does not create a second follow-up message for the same workflow.
 
 ## Project Structure
 
