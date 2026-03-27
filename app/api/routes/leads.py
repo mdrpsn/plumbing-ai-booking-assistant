@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.db.models import AuditLog, Conversation, Customer, Lead, Message
 from app.db.session import get_db
 from app.schemas.lead import LeadCreate, LeadRead
+from app.services.follow_up import register_no_response_follow_up
 from app.services.mock_sms_provider import MockSmsProvider
 from app.services.notification_service import NotificationService
 from app.services.triage import determine_urgency
@@ -102,6 +103,7 @@ def create_lead(payload: LeadCreate, db: Session = Depends(get_db)) -> Lead:
             },
         )
     )
+    register_no_response_follow_up(db, customer, lead, conversation)
     db.commit()
     db.refresh(lead)
     return lead

@@ -1,6 +1,6 @@
 # Plumbing AI Booking Assistant Backend
 
-Phase 2C adds inbound messaging and conversation tracking so the backend supports two-way customer communication around service requests.
+Phase 2D adds workflow-driven follow-up automation so the backend can detect no-response conversations and send deterministic reminder messages.
 
 ## Features
 
@@ -8,6 +8,7 @@ Phase 2C adds inbound messaging and conversation tracking so the backend support
 - `POST /api/leads` finds or creates a customer, stores the lead in SQLite, assigns `emergency`, `standard`, or `review`, persists an outbound confirmation message, sends it through a mock SMS provider, and writes audit logs.
 - `POST /api/bookings/request` validates `lead_id`, persists a booking request, returns the saved record, and writes an audit log.
 - `POST /api/messages/inbound` validates an inbound SMS payload, resolves the customer, creates or reuses a conversation, persists the inbound message, updates conversation state, and writes an audit log.
+- `POST /api/workflows/follow-ups/process` evaluates due follow-up workflows and sends reminder messages when a customer has not replied.
 - Configuration is environment-driven with no secrets committed to source.
 - SQLite remains the backing store and external integrations stay mocked.
 
@@ -19,6 +20,7 @@ Phase 2C adds inbound messaging and conversation tracking so the backend support
 - `AuditLog`: an append-only operational log for lead intake and booking request events.
 - `Conversation`: a two-way messaging thread linked to a customer and optionally to a lead.
 - `Message`: a persisted communication record linked to a customer and optionally to the originating lead.
+- `WorkflowRun`: a persisted job record used to track delayed no-response follow-up evaluation and outcomes.
 
 ## Messaging Flow
 
@@ -27,7 +29,8 @@ Phase 2C adds inbound messaging and conversation tracking so the backend support
 3. The service builds an outbound confirmation SMS message for that lead.
 4. The outbound message is sent through a notification abstraction backed by a mock SMS provider.
 5. The service persists the `Message` record with provider metadata and delivery status.
-6. The service writes an `AuditLog` entry for the notification action.
+6. The service registers a delayed no-response `WorkflowRun`.
+7. The service writes an `AuditLog` entry for the notification action.
 
 ## Inbound Messaging Flow
 
@@ -38,6 +41,14 @@ Phase 2C adds inbound messaging and conversation tracking so the backend support
 5. The service updates conversation state to reflect the customer reply.
 6. The service writes an `AuditLog` entry for the inbound message event.
 
+## Follow-Up Workflow
+
+1. Lead creation registers a pending no-response `WorkflowRun` with a deterministic delay.
+2. `POST /api/workflows/follow-ups/process` evaluates due pending workflow runs.
+3. If an inbound customer message exists for the conversation, the workflow is marked `skipped`.
+4. If no inbound reply exists, the service creates and sends an outbound follow-up `Message`.
+5. The conversation state, workflow status, and audit logs are updated with the outcome.
+
 ## Request Flow
 
 1. `POST /api/leads` receives intake data.
@@ -46,7 +57,8 @@ Phase 2C adds inbound messaging and conversation tracking so the backend support
 4. The service writes an `AuditLog` entry for the new lead.
 5. The service creates and sends a confirmation `Message`, then writes a notification `AuditLog`.
 6. Customers can reply through `POST /api/messages/inbound`, which updates the linked conversation state.
-7. `POST /api/bookings/request` validates the lead, stores a `BookingRequest`, returns mocked availability, and writes another `AuditLog` entry.
+7. Follow-up processing can send a reminder message if the customer has not replied within the configured threshold.
+8. `POST /api/bookings/request` validates the lead, stores a `BookingRequest`, returns mocked availability, and writes another `AuditLog` entry.
 
 ## Project Structure
 
@@ -69,6 +81,8 @@ pip install -r requirements.txt
 copy .env.example .env
 uvicorn app.main:app --reload
 ```
+
+`FOLLOW_UP_DELAY_MINUTES` controls when a no-response workflow becomes eligible for evaluation.
 
 ## API Examples
 
@@ -102,6 +116,14 @@ Sample booking response fields now include persisted record metadata such as `id
 curl -X POST http://127.0.0.1:8000/api/messages/inbound ^
   -H "Content-Type: application/json" ^
   -d "{\"from_phone\":\"5551234567\",\"body\":\"Can someone come this afternoon?\",\"provider_message_id\":\"provider-inbound-001\",\"lead_id\":1}"
+```
+
+### Process Due Follow-Ups
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/workflows/follow-ups/process ^
+  -H "Content-Type: application/json" ^
+  -d "{\"now_at\":\"2026-03-27T14:00:00Z\"}"
 ```
 
 ## Testing

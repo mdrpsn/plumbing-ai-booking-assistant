@@ -6,6 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "Plumbing AI Booking Assistant"
     database_url: str = "sqlite:///./plumbing_assistant.db"
+    follow_up_delay_minutes: int = 30
 
     model_config = SettingsConfigDict(
         env_file=".env",

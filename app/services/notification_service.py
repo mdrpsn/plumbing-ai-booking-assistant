@@ -31,3 +31,7 @@ class NotificationService:
         message_body = self.build_lead_confirmation(customer, lead)
         result = self.sms_provider.send_sms(customer.phone, message_body)
         return message_body, result
+
+    def send_sms(self, recipient: str, body: str) -> tuple[str, NotificationResult]:
+        result = self.sms_provider.send_sms(recipient, body)
+        return body, result

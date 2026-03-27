@@ -2,7 +2,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import AuditLog, BookingRequest, Conversation, Customer, Lead, Message
+from datetime import UTC, datetime, timedelta
+
+from app.db.models import AuditLog, BookingRequest, Conversation, Customer, Lead, Message, WorkflowRun
 from app.db.session import Base, engine
 from app.main import app
 
@@ -49,13 +51,15 @@ def test_create_lead_persists_and_assigns_urgency() -> None:
         lead_count = connection.execute(select(func.count()).select_from(Lead)).scalar_one()
         conversation_count = connection.execute(select(func.count()).select_from(Conversation)).scalar_one()
         message_count = connection.execute(select(func.count()).select_from(Message)).scalar_one()
+        workflow_count = connection.execute(select(func.count()).select_from(WorkflowRun)).scalar_one()
         audit_count = connection.execute(select(func.count()).select_from(AuditLog)).scalar_one()
 
     assert customer_count == 1
     assert lead_count == 1
     assert conversation_count == 1
     assert message_count == 1
-    assert audit_count == 2
+    assert workflow_count == 1
+    assert audit_count == 3
 
 
 def test_create_lead_creates_confirmation_message_and_audit_log() -> None:
@@ -76,6 +80,7 @@ def test_create_lead_creates_confirmation_message_and_audit_log() -> None:
     with Session(engine) as session:
         message = session.execute(select(Message)).scalar_one()
         conversation = session.execute(select(Conversation)).scalar_one()
+        workflow_run = session.execute(select(WorkflowRun)).scalar_one()
         audit_logs = session.execute(
             select(AuditLog).where(AuditLog.event_type == "notification.sent")
         ).scalars().all()
@@ -92,6 +97,9 @@ def test_create_lead_creates_confirmation_message_and_audit_log() -> None:
     assert message.provider_message_id.startswith("mock-sms-5551234567-")
     assert conversation.status == "open"
     assert conversation.last_message_direction == "outbound"
+    assert workflow_run.workflow_type == "no_response_follow_up"
+    assert workflow_run.status == "pending"
+    assert workflow_run.conversation_id == conversation.id
     assert len(audit_logs) == 1
     assert audit_logs[0].entity_type == "message"
     assert audit_logs[0].entity_id == message.id
@@ -128,13 +136,15 @@ def test_create_lead_reuses_existing_customer() -> None:
         lead_count = connection.execute(select(func.count()).select_from(Lead)).scalar_one()
         conversation_count = connection.execute(select(func.count()).select_from(Conversation)).scalar_one()
         message_count = connection.execute(select(func.count()).select_from(Message)).scalar_one()
+        workflow_count = connection.execute(select(func.count()).select_from(WorkflowRun)).scalar_one()
         audit_count = connection.execute(select(func.count()).select_from(AuditLog)).scalar_one()
 
     assert customer_count == 1
     assert lead_count == 2
     assert conversation_count == 2
     assert message_count == 2
-    assert audit_count == 4
+    assert workflow_count == 2
+    assert audit_count == 6
 
 
 def test_booking_request_returns_mock_availability() -> None:
@@ -167,7 +177,7 @@ def test_booking_request_returns_mock_availability() -> None:
         audit_count = connection.execute(select(func.count()).select_from(AuditLog)).scalar_one()
 
     assert booking_request_count == 1
-    assert audit_count == 3
+    assert audit_count == 4
 
 
 def test_booking_request_validates_lead_id() -> None:
@@ -237,3 +247,104 @@ def test_inbound_message_returns_404_for_unknown_customer_phone() -> None:
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Customer not found for phone number"
+
+
+def test_follow_up_process_sends_message_when_no_customer_reply_exists() -> None:
+    lead_response = client.post(
+        "/api/leads",
+        json={
+            "name": "Jordan Smith",
+            "phone": "5551234567",
+            "email": "jordan@example.com",
+            "issue": "Burst pipe flooding the kitchen",
+            "address": "123 Main St",
+        },
+    )
+    lead_id = lead_response.json()["id"]
+
+    with Session(engine) as session:
+        workflow_run = session.execute(select(WorkflowRun)).scalar_one()
+        workflow_run.scheduled_for = datetime.now(UTC) - timedelta(minutes=1)
+        session.commit()
+
+    response = client.post(
+        "/api/workflows/follow-ups/process",
+        json={"now_at": datetime.now(UTC).isoformat()},
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["evaluated"] == 1
+    assert body["sent"] == 1
+    assert body["skipped"] == 0
+
+    with Session(engine) as session:
+        conversation = session.execute(select(Conversation)).scalar_one()
+        messages = session.execute(select(Message).order_by(Message.id.asc())).scalars().all()
+        workflow_run = session.execute(select(WorkflowRun)).scalar_one()
+        completion_audit = session.execute(
+            select(AuditLog).where(AuditLog.event_type == "workflow.completed")
+        ).scalar_one()
+
+    assert len(messages) == 2
+    assert messages[1].lead_id == lead_id
+    assert messages[1].direction == "outbound"
+    assert messages[1].status == "sent"
+    assert "following up on your plumbing request" in messages[1].body
+    assert conversation.status == "follow_up_sent"
+    assert workflow_run.status == "completed"
+    assert workflow_run.result_message_id == messages[1].id
+    assert completion_audit.entity_id == workflow_run.id
+
+
+def test_follow_up_process_skips_when_customer_replied() -> None:
+    lead_response = client.post(
+        "/api/leads",
+        json={
+            "name": "Jordan Smith",
+            "phone": "5551234567",
+            "email": "jordan@example.com",
+            "issue": "Burst pipe flooding the kitchen",
+            "address": "123 Main St",
+        },
+    )
+    lead_id = lead_response.json()["id"]
+    client.post(
+        "/api/messages/inbound",
+        json={
+            "from_phone": "5551234567",
+            "body": "Yes, I still need help.",
+            "provider_message_id": "provider-inbound-skip",
+            "lead_id": lead_id,
+        },
+    )
+
+    with Session(engine) as session:
+        workflow_run = session.execute(select(WorkflowRun)).scalar_one()
+        workflow_run.scheduled_for = datetime.now(UTC) - timedelta(minutes=1)
+        session.commit()
+
+    response = client.post(
+        "/api/workflows/follow-ups/process",
+        json={"now_at": datetime.now(UTC).isoformat()},
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["evaluated"] == 1
+    assert body["sent"] == 0
+    assert body["skipped"] == 1
+
+    with Session(engine) as session:
+        conversation = session.execute(select(Conversation)).scalar_one()
+        messages = session.execute(select(Message).order_by(Message.id.asc())).scalars().all()
+        workflow_run = session.execute(select(WorkflowRun)).scalar_one()
+        skip_audit = session.execute(
+            select(AuditLog).where(AuditLog.event_type == "workflow.skipped")
+        ).scalar_one()
+
+    assert len(messages) == 2
+    assert conversation.status == "customer_replied"
+    assert workflow_run.status == "skipped"
+    assert workflow_run.result_message_id is None
+    assert skip_audit.entity_id == workflow_run.id

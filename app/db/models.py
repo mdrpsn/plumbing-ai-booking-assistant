@@ -74,6 +74,7 @@ class Conversation(Base):
     customer: Mapped["Customer"] = relationship(back_populates="conversations")
     lead: Mapped["Lead | None"] = relationship(back_populates="conversations")
     messages: Mapped[list["Message"]] = relationship(back_populates="conversation")
+    workflow_runs: Mapped[list["WorkflowRun"]] = relationship(back_populates="conversation")
 
 
 class BookingRequest(Base):
@@ -138,3 +139,25 @@ class Message(Base):
     conversation: Mapped["Conversation | None"] = relationship(back_populates="messages")
     customer: Mapped["Customer"] = relationship(back_populates="messages")
     lead: Mapped["Lead | None"] = relationship(back_populates="messages")
+
+
+class WorkflowRun(Base):
+    __tablename__ = "workflow_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), nullable=False, index=True)
+    lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id"), nullable=False, index=True)
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id"), nullable=False, index=True)
+    workflow_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    result_message_id: Mapped[int | None] = mapped_column(ForeignKey("messages.id"), nullable=True, index=True)
+    details: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    conversation: Mapped["Conversation"] = relationship(back_populates="workflow_runs")
