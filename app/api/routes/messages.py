@@ -1,14 +1,14 @@
-from datetime import datetime, timezone
-
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Form, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import AuditLog, Conversation, Customer, Lead, Message
+from app.db.models import AuditLog, Message
 from app.db.session import get_db
 from app.schemas.message import InboundMessageRead, InboundMessageWebhook
 from app.services.mock_sms_provider import MockSmsProvider
-from app.services.phone_normalization import normalize_phone
+from app.services.message_service import process_inbound_message
+from app.services.provider_webhook_security import verify_twilio_request_or_raise
+from app.services.twilio_sms_provider import TwilioSmsProvider
 
 
 router = APIRouter(prefix="/api/messages", tags=["messages"])
@@ -20,102 +20,96 @@ def receive_inbound_message(
     response: Response,
     db: Session = Depends(get_db),
 ) -> Message:
-    idempotency_key = _build_inbound_idempotency_key(payload.provider_message_id)
-    existing_message = db.scalar(
-        select(Message).where(Message.idempotency_key == idempotency_key)
+    return process_inbound_message(
+        db,
+        payload,
+        provider_name=MockSmsProvider.provider_name,
+        response=response,
     )
-    if existing_message is not None:
-        response.status_code = status.HTTP_200_OK
-        return existing_message
 
-    customer = db.scalar(
-        select(Customer).where(Customer.normalized_phone == normalize_phone(payload.from_phone))
+
+@router.post("/providers/twilio/inbound", response_model=InboundMessageRead, status_code=status.HTTP_201_CREATED)
+async def receive_twilio_inbound_message(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+    From: str = Form(...),
+    Body: str = Form(...),
+    MessageSid: str = Form(...),
+    LeadId: int | None = Form(default=None),
+) -> Message:
+    form_payload = {
+        "From": From,
+        "Body": Body,
+        "MessageSid": MessageSid,
+    }
+    if LeadId is not None:
+        form_payload["LeadId"] = str(LeadId)
+    verify_twilio_request_or_raise(request, form_payload)
+    return process_inbound_message(
+        db,
+        InboundMessageWebhook(
+            from_phone=From,
+            body=Body,
+            provider_message_id=MessageSid,
+            lead_id=LeadId,
+        ),
+        provider_name=TwilioSmsProvider.provider_name,
+        response=response,
     )
-    if customer is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Customer not found for phone number",
+
+
+@router.post("/providers/twilio/status")
+async def receive_twilio_status_callback(
+    request: Request,
+    db: Session = Depends(get_db),
+    MessageSid: str = Form(...),
+    MessageStatus: str = Form(...),
+    ErrorCode: str | None = Form(default=None),
+) -> dict[str, str]:
+    form_payload = {
+        "MessageSid": MessageSid,
+        "MessageStatus": MessageStatus,
+    }
+    if ErrorCode:
+        form_payload["ErrorCode"] = ErrorCode
+    verify_twilio_request_or_raise(request, form_payload)
+
+    message = db.scalar(
+        select(Message).where(
+            Message.provider == TwilioSmsProvider.provider_name,
+            Message.provider_message_id == MessageSid,
         )
-
-    lead = _resolve_lead(db, customer, payload.lead_id)
-    conversation = _get_or_create_conversation(db, customer, lead)
-    inbound_message = Message(
-        conversation_id=conversation.id,
-        customer_id=customer.id,
-        lead_id=lead.id if lead is not None else None,
-        direction="inbound",
-        channel=conversation.channel,
-        provider=MockSmsProvider.provider_name,
-        idempotency_key=idempotency_key,
-        recipient=payload.from_phone,
-        body=payload.body,
-        status="received",
-        provider_message_id=payload.provider_message_id,
     )
-    db.add(inbound_message)
-    db.flush()
+    if message is None:
+        db.add(
+            AuditLog(
+                event_type="provider.callback.missing_message",
+                entity_type="message",
+                entity_id=0,
+                details={
+                    "provider": TwilioSmsProvider.provider_name,
+                    "provider_message_id": MessageSid,
+                    "status": MessageStatus,
+                },
+            )
+        )
+        db.commit()
+        return {"status": "ignored"}
 
-    inbound_message.created_at = inbound_message.created_at or datetime.now(timezone.utc)
-    conversation.status = "customer_replied"
-    conversation.last_message_direction = inbound_message.direction
-    conversation.last_message_at = inbound_message.created_at
+    message.status = MessageStatus
     db.add(
         AuditLog(
-            event_type="message.received",
+            event_type="provider.callback.processed",
             entity_type="message",
-            entity_id=inbound_message.id,
+            entity_id=message.id,
             details={
-                "conversation_id": conversation.id,
-                "customer_id": customer.id,
-                "lead_id": lead.id if lead is not None else None,
-                "provider": inbound_message.provider,
-                "status": inbound_message.status,
+                "provider": TwilioSmsProvider.provider_name,
+                "provider_message_id": MessageSid,
+                "status": MessageStatus,
+                "error_code": ErrorCode,
             },
         )
     )
     db.commit()
-    db.refresh(inbound_message)
-    return inbound_message
-
-
-def _resolve_lead(db: Session, customer: Customer, lead_id: int | None) -> Lead | None:
-    if lead_id is not None:
-        lead = db.get(Lead, lead_id)
-        if lead is None or lead.customer_id != customer.id:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Lead not found for customer",
-            )
-        return lead
-
-    return db.scalar(
-        select(Lead)
-        .where(Lead.customer_id == customer.id)
-        .order_by(Lead.created_at.desc(), Lead.id.desc())
-    )
-
-
-def _get_or_create_conversation(db: Session, customer: Customer, lead: Lead | None) -> Conversation:
-    lead_id = lead.id if lead is not None else None
-    conversation = db.scalar(
-        select(Conversation).where(
-            Conversation.customer_id == customer.id,
-            Conversation.lead_id == lead_id,
-            Conversation.channel == "sms",
-        )
-    )
-    if conversation is None:
-        conversation = Conversation(
-            customer_id=customer.id,
-            lead_id=lead_id,
-            channel="sms",
-            status="open",
-        )
-        db.add(conversation)
-        db.flush()
-
-    return conversation
-
-
-def _build_inbound_idempotency_key(provider_message_id: str) -> str:
-    return f"inbound:{MockSmsProvider.provider_name}:{provider_message_id}"
+    return {"status": "ok"}

@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     twilio_auth_token: str | None = None
     twilio_from_phone: str | None = None
     twilio_api_base_url: str = "https://api.twilio.com"
+    twilio_status_callback_url: str | None = None
+    twilio_webhook_verification_enabled: bool = True
 
     model_config = SettingsConfigDict(
         env_file=".env",

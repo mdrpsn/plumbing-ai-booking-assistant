@@ -12,6 +12,7 @@ class TwilioSmsProvider:
         self.auth_token = settings.twilio_auth_token
         self.from_phone = settings.twilio_from_phone
         self.api_base_url = settings.twilio_api_base_url.rstrip("/")
+        self.status_callback_url = settings.twilio_status_callback_url
 
         missing_fields = [
             field_name
@@ -29,14 +30,18 @@ class TwilioSmsProvider:
             )
 
     def send_sms(self, recipient: str, body: str) -> NotificationResult:
+        request_data = {
+            "From": self.from_phone,
+            "To": recipient,
+            "Body": body,
+        }
+        if self.status_callback_url:
+            request_data["StatusCallback"] = self.status_callback_url
+
         response = httpx.post(
             f"{self.api_base_url}/2010-04-01/Accounts/{self.account_sid}/Messages.json",
             auth=(self.account_sid, self.auth_token),
-            data={
-                "From": self.from_phone,
-                "To": recipient,
-                "Body": body,
-            },
+            data=request_data,
             timeout=10.0,
         )
         response.raise_for_status()

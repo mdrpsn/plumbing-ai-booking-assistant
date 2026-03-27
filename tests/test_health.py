@@ -10,6 +10,7 @@ from app.main import app
 from app.services.mock_sms_provider import MockSmsProvider
 from app.services.notification_service import NotificationService
 from app.services.phone_normalization import normalize_phone
+from app.services.provider_webhook_security import _build_twilio_signature
 from app.services.sms_provider_factory import get_notification_service, get_sms_provider
 from app.services.twilio_sms_provider import TwilioSmsProvider
 from app.services.workflow_execution import WorkflowExecutionService
@@ -331,6 +332,122 @@ def test_inbound_message_returns_404_for_unknown_customer_phone() -> None:
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Customer not found for phone number"
+
+
+def test_twilio_inbound_route_is_safe_without_signature_in_mock_mode() -> None:
+    lead_response = client.post(
+        "/api/leads",
+        json={
+            "name": "Jordan Smith",
+            "phone": "5551234567",
+            "email": "jordan@example.com",
+            "issue": "Burst pipe flooding the kitchen",
+            "address": "123 Main St",
+        },
+    )
+
+    response = client.post(
+        "/api/messages/providers/twilio/inbound",
+        data={
+            "From": "5551234567",
+            "Body": "Mock-safe inbound callback",
+            "MessageSid": "SMmocksafe001",
+            "LeadId": str(lead_response.json()["id"]),
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["provider"] == "twilio"
+
+
+def test_twilio_inbound_route_rejects_invalid_signature_when_enabled(monkeypatch) -> None:
+    monkeypatch.setenv("SMS_PROVIDER", "twilio")
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "AC123")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "twilio-test-token")
+    monkeypatch.setenv("TWILIO_FROM_PHONE", "+15550001111")
+    get_settings.cache_clear()
+    get_sms_provider.cache_clear()
+    get_notification_service.cache_clear()
+
+    response = client.post(
+        "/api/messages/providers/twilio/inbound",
+        data={
+            "From": "5551234567",
+            "Body": "Signed inbound callback",
+            "MessageSid": "SMinvalidsig001",
+        },
+        headers={"X-Twilio-Signature": "invalid-signature"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Invalid Twilio signature"
+
+
+def test_twilio_status_callback_updates_message_and_audits(monkeypatch) -> None:
+    monkeypatch.setenv("SMS_PROVIDER", "twilio")
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "AC123")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "twilio-test-token")
+    monkeypatch.setenv("TWILIO_FROM_PHONE", "+15550001111")
+    get_settings.cache_clear()
+    get_sms_provider.cache_clear()
+    get_notification_service.cache_clear()
+
+    with Session(engine) as session:
+        customer = Customer(
+            name="Jordan Smith",
+            phone="5551234567",
+            normalized_phone=normalize_phone("5551234567"),
+            email="jordan@example.com",
+            address="123 Main St",
+        )
+        session.add(customer)
+        session.flush()
+        message = Message(
+            customer_id=customer.id,
+            lead_id=None,
+            conversation_id=None,
+            direction="outbound",
+            channel="sms",
+            provider="twilio",
+            idempotency_key="test:twilio:callback",
+            recipient="5551234567",
+            body="Test outbound message",
+            status="queued",
+            provider_message_id="SMcallback001",
+        )
+        session.add(message)
+        session.commit()
+
+    callback_url = "http://testserver/api/messages/providers/twilio/status"
+    form_data = {
+        "MessageSid": "SMcallback001",
+        "MessageStatus": "delivered",
+    }
+    signature = _build_twilio_signature(
+        auth_token="twilio-test-token",
+        url=callback_url,
+        form_data=form_data,
+    )
+
+    response = client.post(
+        "/api/messages/providers/twilio/status",
+        data=form_data,
+        headers={"X-Twilio-Signature": signature},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+    with Session(engine) as session:
+        message = session.execute(
+            select(Message).where(Message.provider_message_id == "SMcallback001")
+        ).scalar_one()
+        audit_log = session.execute(
+            select(AuditLog).where(AuditLog.event_type == "provider.callback.processed")
+        ).scalar_one()
+
+    assert message.status == "delivered"
+    assert audit_log.entity_id == message.id
 
 
 def test_follow_up_process_sends_message_when_no_customer_reply_exists() -> None:

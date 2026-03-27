@@ -73,6 +73,7 @@ Phase 4A adds a real SMS provider boundary with configuration-driven selection, 
 - `SMS_PROVIDER=mock` is the default and is used for local development and tests.
 - `SMS_PROVIDER=twilio` enables the Twilio-backed implementation behind the same notification abstraction.
 - Lead confirmations and follow-up messages both use the configured provider path.
+- Twilio inbound and delivery callback routes can verify request signatures when Twilio mode is enabled.
 - No credentials are required for tests because the default provider remains mock-based.
 - Do not commit live Twilio credentials; configure them only through environment variables.
 
@@ -81,7 +82,26 @@ Required environment variables when `SMS_PROVIDER=twilio`:
 - `TWILIO_ACCOUNT_SID`
 - `TWILIO_AUTH_TOKEN`
 - `TWILIO_FROM_PHONE`
+- `TWILIO_WEBHOOK_VERIFICATION_ENABLED`
 - Optional: `TWILIO_API_BASE_URL` if you need a non-default API host for controlled environments.
+- Optional: `TWILIO_STATUS_CALLBACK_URL` to let Twilio post delivery events back to the app.
+
+## Provider Callback Flow
+
+1. When `SMS_PROVIDER=twilio`, outbound SMS sends can include `TWILIO_STATUS_CALLBACK_URL`.
+2. Twilio can POST delivery events to `POST /api/messages/providers/twilio/status`.
+3. The app verifies the `X-Twilio-Signature` header when verification is enabled in Twilio mode.
+4. Matching `Message` records are updated with the new provider delivery status.
+5. The app writes `AuditLog` entries for callback processing.
+
+Twilio inbound webhook route:
+
+- `POST /api/messages/providers/twilio/inbound`
+
+Local/mock safety:
+
+- In mock mode, Twilio-specific webhook routes can be exercised locally without real credentials or signature enforcement.
+- Signature verification should only be bypassed in local/mock mode.
 
 ## Request Flow
 
