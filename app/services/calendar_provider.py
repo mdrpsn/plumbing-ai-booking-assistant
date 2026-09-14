@@ -1,21 +1,19 @@
-MOCK_SLOTS_BY_URGENCY = {
-    "emergency": [
-        "2026-03-27T09:00:00Z",
-        "2026-03-27T11:00:00Z",
-        "2026-03-27T14:00:00Z",
-    ],
-    "standard": [
-        "2026-03-28T09:00:00Z",
-        "2026-03-28T13:00:00Z",
-        "2026-03-29T10:00:00Z",
-    ],
-    "review": [
-        "2026-03-30T10:00:00Z",
-        "2026-03-31T15:00:00Z",
-        "2026-04-01T09:30:00Z",
-    ],
+from datetime import datetime, timedelta, timezone
+
+# Hour offsets from "now" per urgency tier - emergency gets same/next-day slots,
+# standard a couple days out, review pushed furthest. Computed relative to the
+# real current time instead of hardcoded dates, which go stale (and look
+# broken in a demo) the moment the calendar rolls past them.
+MOCK_SLOT_OFFSETS_HOURS = {
+    "emergency": [4, 6, 9],
+    "standard": [28, 32, 50],
+    "review": [76, 100, 124],
 }
 
 
 def get_mock_availability(urgency: str) -> list[str]:
-    return MOCK_SLOTS_BY_URGENCY.get(urgency, MOCK_SLOTS_BY_URGENCY["review"])
+    offsets = MOCK_SLOT_OFFSETS_HOURS.get(urgency, MOCK_SLOT_OFFSETS_HOURS["review"])
+    now = datetime.now(timezone.utc)
+    return [
+        (now + timedelta(hours=h)).strftime("%Y-%m-%dT%H:00:00Z") for h in offsets
+    ]
