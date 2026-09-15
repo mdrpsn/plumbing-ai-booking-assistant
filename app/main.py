@@ -1,7 +1,9 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from app.api.routes.bookings import router as bookings_router
 from app.api.routes.health import router as health_router
@@ -29,3 +31,5 @@ app.include_router(leads_router)
 app.include_router(bookings_router)
 app.include_router(messages_router)
 app.include_router(workflows_router)
+
+app.mount("/demo", StaticFiles(directory=Path(__file__).parent / "static"), name="demo")

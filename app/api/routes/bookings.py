@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import AuditLog, BookingRequest, Lead
@@ -8,6 +9,17 @@ from app.services.calendar_provider import get_mock_availability
 
 
 router = APIRouter(prefix="/api/bookings", tags=["bookings"])
+
+
+@router.get("", response_model=list[BookingRequestRead])
+def list_bookings(db: Session = Depends(get_db)) -> list[BookingRequest]:
+    return list(
+        db.scalars(
+            select(BookingRequest).order_by(
+                BookingRequest.created_at.desc(), BookingRequest.id.desc()
+            )
+        )
+    )
 
 
 @router.post("/request", response_model=BookingRequestRead)

@@ -630,6 +630,106 @@ def test_sms_provider_defaults_to_mock() -> None:
     assert isinstance(notification_service.sms_provider, MockSmsProvider)
 
 
+def test_list_leads_returns_created_leads_newest_first() -> None:
+    first_response = client.post(
+        "/api/leads",
+        json={
+            "name": "Jordan Smith",
+            "phone": "5551234567",
+            "issue": "Burst pipe flooding the kitchen",
+            "address": "123 Main St",
+        },
+    )
+    second_response = client.post(
+        "/api/leads",
+        json={
+            "name": "Alex Doe",
+            "phone": "5557654321",
+            "issue": "Kitchen sink drain clogged",
+        },
+    )
+
+    response = client.get("/api/leads")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [lead["id"] for lead in body] == [
+        second_response.json()["id"],
+        first_response.json()["id"],
+    ]
+    assert body[0]["urgency"] == "standard"
+    assert body[1]["urgency"] == "emergency"
+
+
+def test_list_leads_returns_empty_list_when_none_exist() -> None:
+    response = client.get("/api/leads")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_list_messages_for_lead_returns_conversation_in_order() -> None:
+    lead_response = client.post(
+        "/api/leads",
+        json={
+            "name": "Jordan Smith",
+            "phone": "5551234567",
+            "issue": "Burst pipe flooding the kitchen",
+            "address": "123 Main St",
+        },
+    )
+    lead_id = lead_response.json()["id"]
+    client.post(
+        "/api/messages/inbound",
+        json={
+            "from_phone": "5551234567",
+            "body": "Yes please send someone this afternoon",
+            "provider_message_id": "provider-list-001",
+            "lead_id": lead_id,
+        },
+    )
+
+    response = client.get(f"/api/messages/by-lead/{lead_id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 2
+    assert body[0]["direction"] == "outbound"
+    assert body[1]["direction"] == "inbound"
+    assert body[1]["body"] == "Yes please send someone this afternoon"
+    assert all(message["lead_id"] == lead_id for message in body)
+
+
+def test_list_messages_for_lead_returns_empty_list_for_lead_with_no_messages() -> None:
+    response = client.get("/api/messages/by-lead/999999")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_list_bookings_returns_created_booking_requests() -> None:
+    lead_response = client.post(
+        "/api/leads",
+        json={
+            "name": "Alex Doe",
+            "phone": "5557654321",
+            "issue": "Kitchen sink drain clogged",
+        },
+    )
+    lead_id = lead_response.json()["id"]
+    booking_response = client.post("/api/bookings/request", json={"lead_id": lead_id})
+
+    response = client.get("/api/bookings")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["id"] == booking_response.json()["id"]
+    assert body[0]["lead_id"] == lead_id
+    assert body[0]["status"] == "pending_dispatch"
+    assert len(body[0]["available_slots"]) == 3
+
+
 def test_sms_provider_can_select_twilio_from_configuration(monkeypatch) -> None:
     monkeypatch.setenv("SMS_PROVIDER", "twilio")
     monkeypatch.setenv("TWILIO_ACCOUNT_SID", "AC123")

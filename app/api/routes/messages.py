@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import AuditLog, Message
 from app.db.session import get_db
-from app.schemas.message import InboundMessageRead, InboundMessageWebhook
+from app.schemas.message import InboundMessageRead, InboundMessageWebhook, MessageRead
 from app.services.mock_sms_provider import MockSmsProvider
 from app.services.message_service import process_inbound_message
 from app.services.provider_webhook_security import verify_twilio_request_or_raise
@@ -12,6 +12,17 @@ from app.services.twilio_sms_provider import TwilioSmsProvider
 
 
 router = APIRouter(prefix="/api/messages", tags=["messages"])
+
+
+@router.get("/by-lead/{lead_id}", response_model=list[MessageRead])
+def list_messages_for_lead(lead_id: int, db: Session = Depends(get_db)) -> list[Message]:
+    return list(
+        db.scalars(
+            select(Message)
+            .where(Message.lead_id == lead_id)
+            .order_by(Message.created_at.asc(), Message.id.asc())
+        )
+    )
 
 
 @router.post("/inbound", response_model=InboundMessageRead, status_code=status.HTTP_201_CREATED)

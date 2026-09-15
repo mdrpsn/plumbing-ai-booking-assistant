@@ -25,3 +25,20 @@ class InboundMessageRead(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class MessageRead(BaseModel):
+    id: int
+    conversation_id: int | None
+    customer_id: int
+    lead_id: int | None
+    direction: str
+    channel: str
+    provider: str
+    recipient: str
+    body: str
+    status: str
+    provider_message_id: str | None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

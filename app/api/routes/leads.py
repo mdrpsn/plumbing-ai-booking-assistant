@@ -16,6 +16,11 @@ from app.services.triage import determine_urgency
 router = APIRouter(prefix="/api/leads", tags=["leads"])
 
 
+@router.get("", response_model=list[LeadRead])
+def list_leads(db: Session = Depends(get_db)) -> list[Lead]:
+    return list(db.scalars(select(Lead).order_by(Lead.created_at.desc(), Lead.id.desc())))
+
+
 @router.post("", response_model=LeadRead, status_code=status.HTTP_201_CREATED)
 def create_lead(payload: LeadCreate, db: Session = Depends(get_db)) -> Lead:
     notification_service = get_notification_service()
